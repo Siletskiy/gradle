@@ -1,7 +1,7 @@
 dependencies {
 
     implementation(project(":configuration"))
-    implementation(project(":build"))
+    implementation(project(":buildBase"))
 
     implementation(kotlin("gradle-plugin"))
     implementation(kotlin("stdlib-jdk8"))
