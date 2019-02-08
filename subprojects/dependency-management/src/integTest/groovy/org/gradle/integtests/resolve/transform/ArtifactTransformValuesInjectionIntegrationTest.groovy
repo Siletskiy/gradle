@@ -16,13 +16,23 @@
 
 package org.gradle.integtests.resolve.transform
 
-import org.gradle.api.artifacts.transform.ArtifactTransformDependencies
+import org.gradle.api.artifacts.transform.PrimaryInput
+import org.gradle.api.artifacts.transform.PrimaryInputDependencies
+import org.gradle.api.artifacts.transform.TransformParameters
+import org.gradle.api.file.FileCollection
+import org.gradle.api.tasks.Destroys
+import org.gradle.api.tasks.LocalState
+import org.gradle.api.tasks.OutputDirectories
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.OutputFiles
+import org.gradle.api.tasks.options.OptionValues
 import org.gradle.integtests.fixtures.AbstractDependencyResolutionTest
 import spock.lang.Unroll
 
-
 class ArtifactTransformValuesInjectionIntegrationTest extends AbstractDependencyResolutionTest implements ArtifactTransformTestFixture {
-    def "transform can receive configuration via constructor parameter"() {
+
+    def "transform can receive parameters, workspace and primary input via abstract getter"() {
         settingsFile << """
             include 'a', 'b', 'c'
         """
@@ -33,7 +43,7 @@ class ArtifactTransformValuesInjectionIntegrationTest extends AbstractDependency
                     registerTransform(MakeGreen) {
                         from.attribute(color, 'blue')
                         to.attribute(color, 'green')
-                        configuration {
+                        parameters {
                             extension = 'green'
                         }
                     }
@@ -48,7 +58,300 @@ class ArtifactTransformValuesInjectionIntegrationTest extends AbstractDependency
             }
             
             @TransformAction(MakeGreenAction)
-            interface MakeGreen extends Serializable {
+            interface MakeGreen {
+                @Input
+                String getExtension()
+                void setExtension(String value)
+            }
+            
+            abstract class MakeGreenAction implements ArtifactTransformAction {
+                @TransformParameters
+                abstract MakeGreen getParameters()
+                @PrimaryInput
+                abstract File getInput()
+                
+                void transform(ArtifactTransformOutputs outputs) {
+                    println "processing \${input.name}"
+                    def output = outputs.registerOutput(input.name + "." + parameters.extension)
+                    output.text = "ok"
+                }
+            }
+"""
+
+        when:
+        run(":a:resolve")
+
+        then:
+        outputContains("processing b.jar")
+        outputContains("processing c.jar")
+        outputContains("result = [b.jar.green, c.jar.green]")
+    }
+
+    def "transform parameters are validated for input output annotations"() {
+        settingsFile << """
+            include 'a', 'b', 'c'
+        """
+        setupBuildWithColorTransform()
+        buildFile << """
+            def makeGreenParameters(project, params) {
+                params.extension = 'green'
+            }
+            
+            project(':a') {
+                dependencies {
+                    implementation project(':b')
+                    implementation project(':c')
+                }
+            }
+            
+            @TransformAction(MakeGreenAction)
+            interface MakeGreen {
+                String getExtension()
+                void setExtension(String value)
+                @OutputDirectory
+                File getOutputDir()
+                void setOutputDir(File outputDir)
+                @Input
+                String getMissingInput()
+                void setMissingInput(String missing)
+            }
+            
+            abstract class MakeGreenAction implements ArtifactTransformAction {
+                @TransformParameters
+                abstract MakeGreen getParameters()
+                
+                void transform(ArtifactTransformOutputs outputs) {
+                    throw new RuntimeException()
+                }
+            }
+"""
+
+        when:
+        fails(":a:resolve")
+
+        then:
+        failure.assertHasDescription('A problem occurred evaluating root project')
+        // TODO wolfs: We should report the user declared type
+        failure.assertHasCause('Some problems were found with the configuration of MakeGreen$Inject.')
+        failure.assertHasCause("Property 'extension' is not annotated with an input or output annotation.")
+        failure.assertHasCause("Property 'outputDir' is not annotated with an input or output annotation.")
+        failure.assertHasCause("Property 'missingInput' does not have a value specified.")
+    }
+
+    @Unroll
+    def "transform parameters type cannot use annotation @#annotation.simpleName"() {
+        settingsFile << """
+            include 'a', 'b', 'c'
+        """
+        setupBuildWithColorTransform()
+        buildFile << """
+            def makeGreenParameters(project, params) {
+                params.extension = 'green'
+            }
+            
+            project(':a') {
+                dependencies {
+                    implementation project(':b')
+                    implementation project(':c')
+                }
+            }
+            
+            @TransformAction(MakeGreenAction)
+            interface MakeGreen {
+                @Input
+                String getExtension()
+                void setExtension(String value)
+                @${annotation.simpleName}
+                String getBad()
+                void setBad(String value)
+            }
+            
+            abstract class MakeGreenAction implements ArtifactTransformAction {
+                @TransformParameters
+                abstract MakeGreen getParameters()
+                
+                void transform(ArtifactTransformOutputs outputs) {
+                    throw new RuntimeException()
+                }
+            }
+"""
+
+        when:
+        fails(":a:resolve")
+
+        then:
+        failure.assertHasDescription('A problem occurred evaluating root project')
+        failure.assertHasCause('A problem was found with the configuration of MakeGreen$Inject.')
+        failure.assertHasCause("Property 'bad' is not annotated with an input or output annotation.")
+
+        where:
+        annotation << [OutputFile, OutputFiles, OutputDirectory, OutputDirectories, Destroys, LocalState, OptionValues]
+    }
+
+    @Unroll
+    def "transform parameters type cannot use injection annotation @#annotation.simpleName"() {
+        settingsFile << """
+            include 'a', 'b', 'c'
+        """
+        setupBuildWithColorTransform()
+        buildFile << """
+            def makeGreenParameters(project, params) {
+                params.extension = 'green'
+            }
+            
+            project(':a') {
+                dependencies {
+                    implementation project(':b')
+                    implementation project(':c')
+                }
+            }
+            
+            @TransformAction(MakeGreenAction)
+            interface MakeGreen {
+                String getExtension()
+                void setExtension(String value)
+                @${annotation.simpleName}
+                String getBad()
+                void setBad(String value)
+            }
+            
+            abstract class MakeGreenAction implements ArtifactTransformAction {
+                @TransformParameters
+                abstract MakeGreen getParameters()
+                
+                void transform(ArtifactTransformOutputs outputs) {
+                    throw new RuntimeException()
+                }
+            }
+"""
+
+        when:
+        fails(":a:resolve")
+
+        then:
+        failure.assertHasDescription('A problem occurred evaluating root project')
+        failure.assertHasCause('Could not create an instance of type MakeGreen.')
+        failure.assertHasCause('Could not generate a decorated class for interface MakeGreen.')
+        failure.assertHasCause("Cannot use @${annotation.simpleName} annotation on method MakeGreen.getBad().")
+
+        where:
+        annotation << [PrimaryInput, PrimaryInputDependencies, TransformParameters]
+    }
+
+    @Unroll
+    def "transform can receive dependencies via abstract getter of type #targetType"() {
+        settingsFile << """
+            include 'a', 'b', 'c'
+        """
+        setupBuildWithColorTransformAction()
+        buildFile << """
+
+project(':a') {
+    dependencies {
+        implementation project(':b')
+    }
+}
+project(':b') {
+    dependencies {
+        implementation project(':c')
+    }
+}
+
+abstract class MakeGreen implements ArtifactTransformAction {
+    @PrimaryInputDependencies
+    abstract ${targetType} getDependencies()
+    @PrimaryInput
+    abstract File getInput()
+    
+    void transform(ArtifactTransformOutputs outputs) {
+        println "received dependencies files \${dependencies*.name} for processing \${input.name}"
+        def output = outputs.registerOutput(input.name + ".green")
+        output.text = "ok"
+    }
+}
+
+"""
+
+        when:
+        run(":a:resolve")
+
+        then:
+        outputContains("received dependencies files [] for processing c.jar")
+        outputContains("received dependencies files [c.jar] for processing b.jar")
+        outputContains("result = [b.jar.green, c.jar.green]")
+
+        where:
+        targetType << ["FileCollection", "Iterable<File>"]
+    }
+
+    @Unroll
+    def "old style transform cannot use @#annotation.name"() {
+        settingsFile << """
+            include 'a', 'b', 'c'
+        """
+        setupBuildWithColorAttributes()
+        buildFile << """
+allprojects {
+    dependencies {
+        registerTransform {
+            from.attribute(color, 'blue')
+            to.attribute(color, 'green')
+            artifactTransform(MakeGreen)
+        }
+    }
+}
+
+project(':a') {
+    dependencies {
+        implementation project(':b')
+        implementation project(':c')
+    }
+}
+
+abstract class MakeGreen extends ArtifactTransform {
+    @${annotation.name}
+    abstract File getInputFile()
+    
+    List<File> transform(File input) {
+        println "processing \${input.name}"
+        def output = new File(outputDirectory, input.name + ".green")
+        output.text = "ok"
+        return [output]
+    }
+}
+
+"""
+
+        when:
+        fails(":a:resolve")
+
+        then:
+        failure.assertHasCause("Cannot use @${annotation.simpleName} annotation on method MakeGreen.getInputFile().")
+
+        where:
+        annotation << [PrimaryInput, PrimaryInputDependencies, TransformParameters]
+    }
+
+    def "transform cannot receive parameter object via constructor parameter"() {
+        settingsFile << """
+            include 'a', 'b', 'c'
+        """
+        setupBuildWithColorTransform()
+        buildFile << """
+            def makeGreenParameters(project, params) {
+                params.extension = 'green'
+            }
+            
+            project(':a') {
+                dependencies {
+                    implementation project(':b')
+                    implementation project(':c')
+                }
+            }
+            
+            @TransformAction(MakeGreenAction)
+            interface MakeGreen {
+                @Input
                 String getExtension()
                 void setExtension(String value)
             }
@@ -71,217 +374,21 @@ class ArtifactTransformValuesInjectionIntegrationTest extends AbstractDependency
 """
 
         when:
-        run(":a:resolve")
+        fails(":a:resolve")
 
         then:
-        outputContains("processing b.jar")
-        outputContains("processing c.jar")
-        outputContains("result = [b.jar.green, c.jar.green]")
-    }
-
-    def "transform can receive configuration via abstract getter"() {
-        settingsFile << """
-            include 'a', 'b', 'c'
-        """
-        setupBuildWithColorAttributes()
-        buildFile << """
-            allprojects {
-                dependencies {
-                    registerTransform(MakeGreen) {
-                        from.attribute(color, 'blue')
-                        to.attribute(color, 'green')
-                        configuration {
-                            extension = 'green'
-                        }
-                    }
-                }
-            }
-            
-            project(':a') {
-                dependencies {
-                    implementation project(':b')
-                    implementation project(':c')
-                }
-            }
-            
-            @TransformAction(MakeGreenAction)
-            interface MakeGreen extends Serializable {
-                String getExtension()
-                void setExtension(String value)
-            }
-            
-            abstract class MakeGreenAction extends ArtifactTransform {
-                @Inject
-                abstract MakeGreen getConf()
-                
-                List<File> transform(File input) {
-                    println "processing \${input.name}"
-                    def output = new File(outputDirectory, input.name + "." + conf.extension)
-                    output.text = "ok"
-                    return [output]
-                }
-            }
-"""
-
-        when:
-        run(":a:resolve")
-
-        then:
-        outputContains("processing b.jar")
-        outputContains("processing c.jar")
-        outputContains("result = [b.jar.green, c.jar.green]")
-    }
-
-    def "transform can receive configuration and construction parameters"() {
-        settingsFile << """
-            include 'a', 'b', 'c'
-        """
-        setupBuildWithColorAttributes()
-        buildFile << """
-            allprojects {
-                dependencies {
-                    registerTransform(MakeGreen) {
-                        from.attribute(color, 'blue')
-                        to.attribute(color, 'green')
-                        configuration {
-                            extension = 'green'
-                        }
-                        params = ['from blue']
-                    }
-                }
-            }
-            
-            project(':a') {
-                dependencies {
-                    implementation project(':b')
-                    implementation project(':c')
-                }
-            }
-            
-            @TransformAction(MakeGreenAction)
-            interface MakeGreen extends Serializable {
-                String getExtension()
-                void setExtension(String value)
-            }
-            
-            abstract class MakeGreenAction extends ArtifactTransform {
-                String content
-                
-                @Inject
-                MakeGreenAction(String content) {
-                    this.content = content
-                }
-                
-                @Inject
-                abstract MakeGreen getConf()
-                
-                List<File> transform(File input) {
-                    println "processing \${input.name} with content '\${content}'"
-                    def output = new File(outputDirectory, input.name + "." + conf.extension)
-                    output.text = content
-                    return [output]
-                }
-            }
-"""
-
-        when:
-        run(":a:resolve")
-
-        then:
-        outputContains("processing b.jar with content 'from blue'")
-        outputContains("processing c.jar with content 'from blue'")
-        outputContains("result = [b.jar.green, c.jar.green]")
-    }
-
-    def "transform can receive dependencies via abstract getter"() {
-        settingsFile << """
-            include 'a', 'b', 'c'
-        """
-        setupBuildWithColorTransform()
-        buildFile << """
-
-project(':a') {
-    dependencies {
-        implementation project(':b')
-    }
-}
-project(':b') {
-    dependencies {
-        implementation project(':c')
-    }
-}
-
-abstract class MakeGreen extends ArtifactTransform {
-    @Inject
-    abstract ArtifactTransformDependencies getDependencies()
-    
-    List<File> transform(File input) {
-        println "received dependencies files \${dependencies.files*.name} for processing \${input.name}"
-        def output = new File(outputDirectory, input.name + ".green")
-        output.text = "ok"
-        return [output]
-    }
-}
-
-"""
-
-        when:
-        run(":a:resolve")
-
-        then:
-        outputContains("received dependencies files [] for processing c.jar")
-        outputContains("received dependencies files [c.jar] for processing b.jar")
-        outputContains("result = [b.jar.green, c.jar.green]")
-    }
-
-    def "transform can receive workspace and primary input via abstract getter"() {
-        settingsFile << """
-            include 'a', 'b', 'c'
-        """
-        setupBuildWithColorTransform()
-        buildFile << """
-
-project(':a') {
-    dependencies {
-        implementation project(':b')
-        implementation project(':c')
-    }
-}
-
-abstract class MakeGreen extends ArtifactTransform {
-    @Workspace
-    abstract File getWorkspace()
-    
-    @PrimaryInput
-    abstract File getInputFile()
-    
-    List<File> transform(File input) {
-        println "processing \${input.name}"
-        assert workspace == outputDirectory
-        assert inputFile == input
-        def output = new File(outputDirectory, input.name + ".green")
-        output.text = "ok"
-        return [output]
-    }
-}
-
-"""
-
-        when:
-        run(":a:resolve")
-
-        then:
-        outputContains("processing c.jar")
-        outputContains("processing b.jar")
-        outputContains("result = [b.jar.green, c.jar.green]")
+        // Documents existing behaviour. Should fail eagerly and with a better error message
+        failure.assertHasDescription("Execution failed for task ':a:resolve'.")
+        failure.assertHasCause("Execution failed for MakeGreenAction: ${file('b/build/b.jar')}.")
+        failure.assertHasCause("Unable to determine constructor argument #1: missing parameter of interface MakeGreen, or no service of type interface MakeGreen")
     }
 
     @Unroll
-    def "transform cannot use #annotation to receive dependencies"() {
+    def "transform cannot use @PrimaryInput to receive dependencies"() {
         settingsFile << """
             include 'a', 'b', 'c'
         """
-        setupBuildWithColorTransform()
+        setupBuildWithColorTransformAction()
         buildFile << """
 
 project(':a') {
@@ -290,11 +397,11 @@ project(':a') {
     }
 }
 
-abstract class MakeGreen extends ArtifactTransform {
-    ${annotation}
-    abstract ArtifactTransformDependencies getDependencies()
+abstract class MakeGreen implements ArtifactTransformAction {
+    @PrimaryInput
+    abstract FileCollection getDependencies()
     
-    List<File> transform(File input) {
+    void transform(ArtifactTransformOutputs outputs) {
         dependencies.files
         throw new RuntimeException("broken")
     }
@@ -308,17 +415,14 @@ abstract class MakeGreen extends ArtifactTransform {
         // Documents existing behaviour. Should fail eagerly and with a better error message
         failure.assertHasDescription("Execution failed for task ':a:resolve'.")
         failure.assertHasCause("Execution failed for MakeGreen: ${file('b/build/b.jar')}.")
-        failure.assertHasCause("No service of type interface ${ArtifactTransformDependencies.name} available.")
-
-        where:
-        annotation << ["@Workspace", "@PrimaryInput"]
+        failure.assertHasCause("No service of type interface ${FileCollection.name} available.")
     }
 
-    def "transform cannot use @Inject to receive workspace or input file"() {
+    def "transform cannot use @Inject to receive input file"() {
         settingsFile << """
             include 'a', 'b', 'c'
         """
-        setupBuildWithColorTransform()
+        setupBuildWithColorTransformAction()
         buildFile << """
 
 project(':a') {
@@ -327,11 +431,11 @@ project(':a') {
     }
 }
 
-abstract class MakeGreen extends ArtifactTransform {
+abstract class MakeGreen implements ArtifactTransformAction {
     @Inject
     abstract File getWorkspace()
     
-    List<File> transform(File input) {
+    void transform(ArtifactTransformOutputs outputs) {
         workspace
         throw new RuntimeException("broken")
     }
@@ -349,10 +453,10 @@ abstract class MakeGreen extends ArtifactTransform {
     }
 
     @Unroll
-    def "task implementation cannot use #annotation"() {
+    def "task implementation cannot use injection annotation @#annotation.simpleName"() {
         buildFile << """
             class MyTask extends DefaultTask {
-                ${annotation}
+                @${annotation.name}
                 File getThing() { null }
             }
 
@@ -363,9 +467,9 @@ abstract class MakeGreen extends ArtifactTransform {
         fails('broken')
         failure.assertHasCause("Could not create task of type 'MyTask'.")
         failure.assertHasCause("Could not generate a decorated class for class MyTask.")
-        failure.assertHasCause("Cannot use ${annotation} annotation on method MyTask.getThing().")
+        failure.assertHasCause("Cannot use @${annotation.simpleName} annotation on method MyTask.getThing().")
 
         where:
-        annotation << ["@Workspace", "@PrimaryInput"]
+        annotation << [PrimaryInput, PrimaryInputDependencies, TransformParameters]
     }
 }

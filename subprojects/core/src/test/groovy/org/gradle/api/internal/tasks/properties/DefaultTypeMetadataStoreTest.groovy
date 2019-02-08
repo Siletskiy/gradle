@@ -24,7 +24,6 @@ import org.gradle.api.internal.ConventionTask
 import org.gradle.api.internal.DynamicObjectAware
 import org.gradle.api.internal.HasConvention
 import org.gradle.api.internal.IConventionAware
-import org.gradle.api.internal.tasks.PropertySpecFactory
 import org.gradle.api.internal.tasks.properties.annotations.ClasspathPropertyAnnotationHandler
 import org.gradle.api.internal.tasks.properties.annotations.PropertyAnnotationHandler
 import org.gradle.api.plugins.ExtensionAware
@@ -42,6 +41,8 @@ import org.gradle.api.tasks.OutputFiles
 import org.gradle.cache.internal.TestCrossBuildInMemoryCacheFactory
 import org.gradle.internal.reflect.PropertyMetadata
 import org.gradle.internal.scripts.ScriptOrigin
+import org.gradle.internal.service.ServiceRegistryBuilder
+import org.gradle.internal.service.scopes.ExecutionGlobalServices
 import spock.lang.Issue
 import spock.lang.Shared
 import spock.lang.Specification
@@ -61,12 +62,14 @@ class DefaultTypeMetadataStoreTest extends Specification {
     ]
 
     @Shared GroovyClassLoader groovyClassLoader
+    def services = ServiceRegistryBuilder.builder().provider(new ExecutionGlobalServices()).build()
+    def metadataStore = new DefaultTypeMetadataStore(services.getAll(PropertyAnnotationHandler), new TestCrossBuildInMemoryCacheFactory())
 
     def setupSpec() {
         groovyClassLoader = new GroovyClassLoader(getClass().classLoader)
     }
 
-    static  class TaskWithCustomAnnotation extends DefaultTask {
+    static class TaskWithCustomAnnotation extends DefaultTask {
         @SearchPath FileCollection searchPath
     }
 
@@ -83,7 +86,7 @@ class DefaultTypeMetadataStoreTest extends Specification {
         }
 
         @Override
-        void visitPropertyValue(PropertyValue propertyInfo, PropertyVisitor visitor, PropertySpecFactory specFactory, BeanPropertyContext context) {
+        void visitPropertyValue(String propertyName, PropertyValue value, PropertyMetadata propertyMetadata, PropertyVisitor visitor, BeanPropertyContext context) {
         }
     }
 
@@ -98,7 +101,7 @@ class DefaultTypeMetadataStoreTest extends Specification {
         then:
         propertiesMetadata.size() == 1
         def propertyMetadata = propertiesMetadata.first()
-        propertyMetadata.fieldName == 'searchPath'
+        propertyMetadata.propertyName == 'searchPath'
         propertyMetadata.propertyType == SearchPath
         propertyMetadata.validationMessages.empty
         typeMetadata.getAnnotationHandlerFor(propertyMetadata) == annotationHandler
@@ -117,8 +120,6 @@ class DefaultTypeMetadataStoreTest extends Specification {
                 @Override @$childAnnotation.name Object getValue() { null }
             }
         """
-
-        def metadataStore = new DefaultTypeMetadataStore([], new TestCrossBuildInMemoryCacheFactory())
 
         def parentMetadata = metadataStore.getTypeMetadata(parentTask).propertiesMetadata.first()
         def childMetadata = metadataStore.getTypeMetadata(childTask).propertiesMetadata.first()
@@ -147,8 +148,6 @@ class DefaultTypeMetadataStoreTest extends Specification {
             }
         """
 
-        def metadataStore = new DefaultTypeMetadataStore([], new TestCrossBuildInMemoryCacheFactory())
-
         def parentMetadata = metadataStore.getTypeMetadata(parentTask).propertiesMetadata.first()
         def childMetadata = metadataStore.getTypeMetadata(childTask).propertiesMetadata.first()
 
@@ -176,8 +175,6 @@ class DefaultTypeMetadataStoreTest extends Specification {
             }
         """
 
-        def metadataStore = new DefaultTypeMetadataStore([], new TestCrossBuildInMemoryCacheFactory())
-
         def parentMetadata = metadataStore.getTypeMetadata(parentTask).propertiesMetadata.first()
         def childMetadata = metadataStore.getTypeMetadata(childTask).propertiesMetadata.first()
 
@@ -200,25 +197,23 @@ class DefaultTypeMetadataStoreTest extends Specification {
     // need to declare their @Classpath properties as @InputFiles as well
     @Issue("https://github.com/gradle/gradle/issues/913")
     def "@Classpath takes precedence over @InputFiles when both are declared on property"() {
-        def metadataStore = new DefaultTypeMetadataStore([new ClasspathPropertyAnnotationHandler()], new TestCrossBuildInMemoryCacheFactory())
+        def metadataStore = new DefaultTypeMetadataStore(services.getAll(PropertyAnnotationHandler) + [new ClasspathPropertyAnnotationHandler()], new TestCrossBuildInMemoryCacheFactory())
 
         when:
         def typeMetadata = metadataStore.getTypeMetadata(ClasspathPropertyTask).propertiesMetadata.findAll { !isIgnored(it) }
 
         then:
-        typeMetadata*.fieldName as List == ["inputFiles1", "inputFiles2"]
+        typeMetadata*.propertyName as List == ["inputFiles1", "inputFiles2"]
         typeMetadata*.propertyType as List == [Classpath, Classpath]
         typeMetadata*.validationMessages.flatten().empty
     }
 
     @Unroll
     def "all properties on #workClass are ignored"() {
-        def metadataStore = new DefaultTypeMetadataStore([], new TestCrossBuildInMemoryCacheFactory())
-
         when:
         def typeMetadata = metadataStore.getTypeMetadata(workClass).propertiesMetadata.findAll { it.propertyType == null }
         then:
-        typeMetadata*.fieldName.empty
+        typeMetadata*.propertyName.empty
 
         where:
         workClass << [ConventionTask.class, DefaultTask.class, AbstractTask.class, Task.class, Object.class, GroovyObject.class, IConventionAware.class, ExtensionAware.class, HasConvention.class, ScriptOrigin.class, DynamicObjectAware.class]
@@ -240,8 +235,6 @@ class DefaultTypeMetadataStoreTest extends Specification {
     }
 
     def "can get annotated properties of simple task"() {
-        def metadataStore = new DefaultTypeMetadataStore([], new TestCrossBuildInMemoryCacheFactory())
-
         when:
         def typeMetadata = metadataStore.getTypeMetadata(SimpleTask).propertiesMetadata
 
@@ -279,6 +272,6 @@ class DefaultTypeMetadataStoreTest extends Specification {
     }
 
     private static List<String> nonIgnoredProperties(Collection<PropertyMetadata> typeMetadata) {
-        typeMetadata.findAll { !isIgnored(it) }*.fieldName.sort()
+        typeMetadata.findAll { !isIgnored(it) }*.propertyName.sort()
     }
 }
