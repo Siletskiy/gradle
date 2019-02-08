@@ -16,24 +16,17 @@
 
 package org.gradle.build
 
+import org.gradle.internal.util.PropertiesUtils
+
 import java.io.File
-import java.io.StringWriter
-import java.nio.charset.Charset
 
 import java.util.*
 
 
 object ReproduciblePropertiesWriter {
 
-    private
-    const val lineSeparator = "\n" // Use LF to have the same result on Windows and on Linux
-
-    private
-    val charset = Charset.forName("8859_1")
-
     /**
-     * Writes [Map] of [data] as [Properties] to a [file] with the given optional [comment],
-     * but without including the timestamp comment.
+     * Writes [Map] of [data] as [Properties] to a [file] without including the timestamp comment.
      */
     @JvmStatic
     @JvmOverloads
@@ -42,42 +35,13 @@ object ReproduciblePropertiesWriter {
     }
 
     /**
-     * Writes [Properties] to a [file] with the given optional [comment],
-     * but without including the timestamp comment.
+     * Writes [Properties] to a [file] without including the timestamp comment.
      */
     @JvmStatic
     @JvmOverloads
     fun store(properties: Properties, file: File, comment: String? = null) {
-        val content = store(properties)
-        writeTo(file, content, comment)
+        PropertiesUtils.store(properties, file, comment, Charsets.ISO_8859_1, "\n")
     }
-
-    private
-    fun writeTo(file: File, content: String, comment: String?) {
-        file.parentFile.mkdirs()
-        file.bufferedWriter(charset).use { writer ->
-            comment?.let { comment ->
-                writer.write("# $comment")
-                writer.write(lineSeparator)
-            }
-            writer.write(content)
-        }
-    }
-
-    fun store(data: Map<String, *>) = store(propertiesFrom(data))
-
-    fun store(properties: Properties): String =
-        toString(properties)
-            .lineSequence()
-            .filterNot { it.startsWith("#") || it.isBlank() }
-            .sorted()
-            .joinToString(lineSeparator)
-
-    private
-    fun toString(properties: Properties): String =
-        StringWriter().also {
-            properties.store(it, null)
-        }.toString()
 
     private
     fun propertiesFrom(data: Map<String, Any?>): Properties =
