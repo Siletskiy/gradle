@@ -37,7 +37,6 @@ rootProject.name = "buildSrc"
 // Please preserve alphabetical order
 include("binaryCompatibility")
 include("build")
-include("buildBase")
 include("buildquality")
 include("cleanup")
 include("configuration")

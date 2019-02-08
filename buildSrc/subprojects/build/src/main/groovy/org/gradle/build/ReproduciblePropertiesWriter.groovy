@@ -13,41 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.gradle.build
 
+import com.google.common.base.Charsets
 import org.gradle.internal.util.PropertiesUtils
 
-import java.io.File
+class ReproduciblePropertiesWriter {
 
-import java.util.*
-
-
-object ReproduciblePropertiesWriter {
-
-    /**
-     * Writes [Map] of [data] as [Properties] to a [file] without including the timestamp comment.
-     */
-    @JvmStatic
-    @JvmOverloads
-    fun store(data: Map<String, *>, file: File, comment: String? = null) {
+    static void store(Map<String, ?> data, File file, String comment = null) {
         store(propertiesFrom(data), file, comment)
     }
 
-    /**
-     * Writes [Properties] to a [file] without including the timestamp comment.
-     */
-    @JvmStatic
-    @JvmOverloads
-    fun store(properties: Properties, file: File, comment: String? = null) {
+    static void store(Properties properties, File file, String comment = null) {
         PropertiesUtils.store(properties, file, comment, Charsets.ISO_8859_1, "\n")
     }
 
-    private
-    fun propertiesFrom(data: Map<String, Any?>): Properties =
-        Properties().apply {
+    private static Properties propertiesFrom(Map<String, ?> data) {
+        new Properties().with {
             data.forEach { key, value ->
                 put(key, value ?: value.toString())
             }
+            it
         }
+    }
 }
